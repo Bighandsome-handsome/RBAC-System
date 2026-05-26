@@ -1,0 +1,327 @@
+"""
+routes/files.py — 文件操作路由
+
+GET    /api/files/              列出文件（需 file:read）
+POST   /api/files/upload        上传文件（需 file:write）
+GET    /api/files/<id>/download 下载文件（需 file:download）
+PUT    /api/files/<id>          重命名/移动（需 file:update）
+DELETE /api/files/<id>          删除文件（需 file:delete）
+POST   /api/files/folder        新建文件夹（需 folder:create）
+"""
+
+import os
+from datetime import datetime
+from flask import Blueprint, request, jsonify, send_from_directory, current_app
+from flask_login import login_required, current_user
+from werkzeug.utils import secure_filename
+from flask import Blueprint, send_from_directory, jsonify, make_response
+from app.models import db, Resource, AuditLog
+from app.decorators import require_permission, write_audit_log
+
+files_bp = Blueprint("files", __name__, url_prefix="/api/files")
+
+ALLOWED_EXTENSIONS = {
+    "txt", "pdf", "png", "jpg", "jpeg", "gif", "bmp",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "zip", "tar", "gz", "csv", "json", "xml", "md",
+}
+
+
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def get_upload_dir() -> str:
+    d = current_app.config.get("UPLOAD_FOLDER", "uploads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+# ── 列出文件 ──────────────────────────────────
+@files_bp.route("/", methods=["GET"])
+@login_required
+@require_permission("file:read")
+def list_files():
+    parent_id = request.args.get("parent_id", type=int)   # None = 根目录
+    resources = Resource.query.filter_by(parent_id=parent_id).all()
+
+    write_audit_log(action="file:read", detail=f"列出目录 parent_id={parent_id}")
+    return jsonify({
+        "code": 200,
+        "data": [r.to_dict() for r in resources],
+        "permissions": list(current_user.get_all_permissions()),
+    })
+
+
+# ── 上传文件 ──────────────────────────────────
+@files_bp.route("/upload", methods=["POST"])
+@login_required
+@require_permission("file:write")
+def upload_file():
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件", "code": 400}), 400
+
+    f = request.files["file"]
+    parent_id = request.form.get("parent_id", type=int)
+
+    if f.filename == "":
+        return jsonify({"error": "文件名为空", "code": 400}), 400
+
+    if not allowed_file(f.filename):
+        return jsonify({"error": "不允许的文件类型", "code": 400}), 400
+
+    filename  = secure_filename(f.filename)
+    save_path = os.path.join(get_upload_dir(), filename)
+    f.save(save_path)
+
+    resource = Resource(
+        name         = filename,
+        path         = save_path,
+        size         = os.path.getsize(save_path),
+        mime_type    = f.content_type,
+        is_directory = False,
+        parent_id    = parent_id,
+        owner_id     = current_user.id,
+    )
+    db.session.add(resource)
+    db.session.commit()
+
+    write_audit_log(action="file:write", resource_id=resource.id,
+                    detail=f"上传文件 {filename}")
+    return jsonify({"code": 200, "data": resource.to_dict()})
+
+
+# # ── 下载文件 ──────────────────────────────────
+# @files_bp.route("/<int:resource_id>/download", methods=["GET"])
+# @login_required
+# @require_permission("file:download")
+# def download_file(resource_id):
+#     resource = Resource.query.get_or_404(resource_id)
+#     if resource.is_directory:
+#         return jsonify({"error": "不能下载文件夹", "code": 400}), 400
+
+#     write_audit_log(action="file:download", resource_id=resource_id,
+#                     detail=f"下载 {resource.name}")
+#     directory = os.path.dirname(resource.path)
+#     return send_from_directory(directory, resource.name, as_attachment=True)
+
+# @files_bp.route("/<int:resource_id>/download", methods=["GET"])
+# @login_required
+# @require_permission("file:download") # 确保只有有下载权的人能进来
+# def download_file(resource_id):
+#     resource = Resource.query.get(resource_id)
+    
+#     if not resource:
+#         print(f"\n 下载失败警报: 前端尝试下载 ID 为 {resource_id} 的文件，但数据库查无此人！")
+#         all_ids = [r.id for r in Resource.query.all()]
+#         print(f"💡 当前数据库 resource 表中真正存在的有效 ID 列表为: {all_ids}")
+#         return jsonify({"error": f"数据库找不到该文件记录，无法下载", "code": 404}), 404
+
+#     if resource.is_directory:
+#         return jsonify({"error": "不能下载文件夹", "code": 400}), 400
+
+#     # 转换为绝对路径读取
+#     abs_path = os.path.abspath(resource.path)
+#     directory = os.path.dirname(abs_path)
+#     real_filename = os.path.basename(abs_path)
+
+#     if not os.path.exists(abs_path):
+#         print(f" 下载失败：数据库有记录，但服务器磁盘找不到物理文件: {abs_path}")
+#         return jsonify({"error": "物理文件丢失", "code": 404}), 404
+
+#     print(f"💾【开始下载】: 正在把文件【{real_filename}】作为附件推送到浏览器...")
+    
+#     # 🌟 as_attachment=True 会强行让浏览器弹出“另存为”保存框，而不是在网页里打开
+#     return send_from_directory(directory, real_filename, as_attachment=True)
+
+
+# ── 重命名/更新文件 ───────────────────────────
+@files_bp.route("/<int:resource_id>", methods=["PUT"])
+@login_required
+@require_permission("file:update")
+def update_file(resource_id):
+    resource = Resource.query.get_or_404(resource_id)
+    data = request.get_json() or {}
+
+    old_name = resource.name
+    if "name" in data:
+        resource.name = data["name"]
+    if "parent_id" in data:
+        resource.parent_id = data["parent_id"]
+    resource.updated_at = datetime.utcnow()
+
+    db.session.commit()
+    write_audit_log(action="file:update", resource_id=resource_id,
+                    detail=f"重命名 {old_name} → {resource.name}")
+    return jsonify({"code": 200, "data": resource.to_dict()})
+
+
+# ── 删除文件 ──────────────────────────────────
+@files_bp.route("/<int:resource_id>", methods=["DELETE"])
+@login_required
+@require_permission("file:delete")
+def delete_file(resource_id):
+    resource = Resource.query.get_or_404(resource_id)
+    name = resource.name
+
+    # 如果是目录，递归删除子资源
+    if resource.is_directory:
+        _recursive_delete(resource)
+    else:
+        if os.path.exists(resource.path):
+            os.remove(resource.path)
+
+    db.session.delete(resource)
+    db.session.commit()
+
+    write_audit_log(action="file:delete", detail=f"删除 {name}")
+    return jsonify({"code": 200, "message": f"已删除 {name}"})
+
+
+def _recursive_delete(resource: Resource):
+    for child in resource.children:
+        if child.is_directory:
+            _recursive_delete(child)
+        else:
+            if os.path.exists(child.path):
+                os.remove(child.path)
+        db.session.delete(child)
+
+
+# ── 新建文件夹 ────────────────────────────────
+@files_bp.route("/folder", methods=["POST"])
+@login_required
+@require_permission("folder:create")
+def create_folder():
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    parent_id = data.get("parent_id")
+
+    if not name:
+        return jsonify({"error": "文件夹名不能为空", "code": 400}), 400
+
+    folder = Resource(
+        name         = name,
+        path         = "",
+        is_directory = True,
+        parent_id    = parent_id,
+        owner_id     = current_user.id,
+    )
+    db.session.add(folder)
+    db.session.commit()
+
+    write_audit_log(action="folder:create", resource_id=folder.id,
+                    detail=f"新建文件夹 {name}")
+    return jsonify({"code": 200, "data": folder.to_dict()})
+
+# ── 在线预览文件（允许 Guest 网页阅读，但不提供下载标头） ─────────────────
+# @files_bp.route("/<int:resource_id>/preview", methods=["GET"])
+# @login_required
+# @require_permission("file:read") # 🌟 Guest 拥有 file:read，所以可以通过此检查！
+# def preview_file(resource_id):
+#     resource = Resource.query.get_or_404(resource_id)
+#     if resource.is_directory:
+#         return jsonify({"error": "不能预览文件夹", "code": 400}), 400
+
+#     directory = os.path.dirname(resource.path)
+    
+#     # 不加 as_attachment=True，浏览器收到后会自动在网页内打开预览（如PDF、图片、TXT）
+#     return send_from_directory(directory, resource.name, as_attachment=False)
+# def preview_file(resource_id):
+#     resource = Resource.query.get(resource_id)
+#     if not resource:
+#         return jsonify({"error": "找不到文件记录", "code": 404}), 404
+        
+#     if resource.is_directory:
+#         return jsonify({"error": "不能预览文件夹", "code": 400}), 400
+
+#     abs_path = os.path.abspath(resource.path)
+#     directory = os.path.dirname(abs_path)
+    
+#     real_filename = os.path.basename(abs_path)
+
+#     print(f"【真正外发: 目标目录: {directory} | 真实文件名: {real_filename}")
+
+#     if not os.path.exists(abs_path):
+#         print(f"物理文件不存在: {abs_path}")
+#         return jsonify({"error": "物理文件丢失", "code": 404}), 404
+
+#     # 🌟 核心修正3：为了防止本地网络环境干扰，显式在响应头中标记为不下载、支持内联预览
+#     from flask import make_response
+#     try:
+#         response = make_response(send_from_directory(directory, real_filename, as_attachment=False))
+#         # 强行给浏览器注入内联 PDF 的 Content-Type 声明
+#         if real_filename.lower().endswith('.pdf'):
+#             response.headers['Content-Type'] = 'application/pdf'
+#         return response
+#     except Exception as e:
+#         print(f"发送流异常: {str(e)}")
+#         return jsonify({"error": "构建文件流失败", "code": 500}), 500
+
+@files_bp.route("/<int:resource_id>/preview", methods=["GET"])
+@login_required
+@require_permission("file:read") # 🌟 Guest 拥有 file:read，Admin 同样拥有
+def preview_file(resource_id):
+    resource = Resource.query.get(resource_id)
+    if not resource:
+        return jsonify({"error": "找不到文件记录", "code": 404}), 404
+        
+    if resource.is_directory:
+        return jsonify({"error": "不能预览文件夹", "code": 400}), 400
+
+    abs_path = os.path.abspath(resource.path)
+    directory = os.path.dirname(abs_path)
+    real_filename = os.path.basename(abs_path)
+
+    print(f"【真正外发】: 目标目录: {directory} | 真实文件名: {real_filename}")
+
+    if not os.path.exists(abs_path):
+        print(f"物理文件不存在: {abs_path}")
+        return jsonify({"error": "物理文件丢失", "code": 404}), 404
+
+    try:
+        # as_attachment=False 告诉浏览器这是内联预览
+        response = make_response(send_from_directory(directory, real_filename, as_attachment=False))
+        
+        # 根据文件类型注入标准的 Content-Type 声明
+        if real_filename.lower().endswith('.pdf'):
+            response.headers['Content-Type'] = 'application/pdf'
+            # 🌟【硬核加固】：在 HTTP 响应头中注入安全响应头，告诉支持该标准的浏览器不要展示下载/另存为按钮
+            response.headers['Content-Disposition'] = f'inline; filename="{real_filename}"'
+        elif real_filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+            response.headers['Content-Type'] = 'image/jpeg'
+        elif real_filename.lower().endswith('.txt'):
+            response.headers['Content-Type'] = 'text/plain; charset=utf-8'
+            
+        return response
+    except Exception as e:
+        print(f"发送流异常: {str(e)}")
+        return jsonify({"error": "构建文件流失败", "code": 500}), 500
+
+@files_bp.route("/<int:resource_id>/download", methods=["GET"])
+@login_required
+@require_permission("file:download") # 🌟 核心卡死：Guest 没有 download 权限，会在这里直接报 403 被拦截！
+def download_file(resource_id):
+    resource = Resource.query.get(resource_id)
+    
+    if not resource:
+        print(f"\n 下载失败警报: 前端尝试下载 ID 为 {resource_id} 的文件，但数据库查无此人！")
+        all_ids = [r.id for r in Resource.query.all()]
+        print(f"💡 当前数据库 resource 表中真正存在的有效 ID 列表为: {all_ids}")
+        return jsonify({"error": f"数据库找不到该文件记录，无法下载", "code": 404}), 404
+
+    if resource.is_directory:
+        return jsonify({"error": "不能下载文件夹", "code": 400}), 400
+
+    abs_path = os.path.abspath(resource.path)
+    directory = os.path.dirname(abs_path)
+    real_filename = os.path.basename(abs_path)
+
+    if not os.path.exists(abs_path):
+        print(f" 下载失败：数据库有记录，但服务器磁盘找不到物理文件: {abs_path}")
+        return jsonify({"error": "物理文件丢失", "code": 404}), 404
+
+    print(f"💾【开始下载】: 正在把文件【{real_filename}】作为附件推送到浏览器...")
+    
+    # as_attachment=True 会强制浏览器拉起系统的下载框，将其作为真实附件保存
+    return send_from_directory(directory, real_filename, as_attachment=True)

@@ -1,0 +1,15 @@
+# 排除本地上传的物理文件
+uploads/
+/app/uploads/
+
+# 排除 Python 编译缓存和虚拟环境
+__pycache__/
+*.pyc
+.venv/
+venv/
+.conda/
+.env
+
+# 排除 IDE 配置文件
+.vscode/
+.idea/
