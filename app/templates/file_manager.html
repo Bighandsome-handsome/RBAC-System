@@ -860,23 +860,57 @@ function filterFiles(q) {
   updateSelectionUI();
   renderFiles();
 }
+let clickTimer = null;
 
 // ══════════════════════════════════════════════
 //  Selection
 // ══════════════════════════════════════════════
+// function selectFile(id, e) {
+//   if (e && (e.ctrlKey || e.metaKey)) {
+//     state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+//   } else {
+//     const wasOnly = state.selected.size === 1 && state.selected.has(id);
+//     state.selected.clear();
+//     if (!wasOnly) state.selected.add(id);
+//   }
+//   updateSelectionUI();
+//   renderFiles();
+//   // 右侧详情面板
+//   if (state.selected.size === 1) showPanel([...state.selected][0]);
+//   else closePanel();
+// }
+
 function selectFile(id, e) {
-  if (e && (e.ctrlKey || e.metaKey)) {
-    state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
-  } else {
-    const wasOnly = state.selected.size === 1 && state.selected.has(id);
-    state.selected.clear();
-    if (!wasOnly) state.selected.add(id);
+  if (e) e.stopPropagation(); // 阻止事件冒泡，防止触发背景的取消选中行为
+
+  // 如果 300 毫秒内又点了一下，说明这是个“双击”动作！
+  if (clickTimer) {
+    clearTimeout(clickTimer); // 强行杀死刚刚建立的单击定时任务
+    clickTimer = null;        // 清空标记
+    return;                   // 核心绝杀：直接退出！不让单击逻辑产生任何多余渲染
   }
-  updateSelectionUI();
-  renderFiles();
-  // 右侧详情面板
-  if (state.selected.size === 1) showPanel([...state.selected][0]);
-  else closePanel();
+
+  // 如果在 250~300 毫秒内没有第二下点击，说明用户确实只想“单击选中”，安全启动定时器
+  clickTimer = setTimeout(() => {
+    
+    // 完全保留单选/多选逻辑 
+    if (e && (e.ctrlKey || e.metaKey)) {
+      state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+    } else {
+      const wasOnly = state.selected.size === 1 && state.selected.has(id);
+      state.selected.clear();
+      if (!wasOnly) state.selected.add(id);
+    }
+    
+    updateSelectionUI();
+    renderFiles();
+    
+    // 右侧详情面板
+    if (state.selected.size === 1) showPanel([...state.selected][0]);
+    else closePanel();
+
+    clickTimer = null; 
+  }, 250); 
 }
 
 function updateSelectionUI() {
@@ -934,68 +968,103 @@ function updateSelectionUI() {
 function openFile(id) {
   const safeId = parseInt(id, 10);
   if (isNaN(safeId)) {
-    toast(' 异常：非法的文件 ID', 'error');
+    toast('异常：非法的文件 ID', 'error');
     return;
   }
 
   const f = state.files.find(x => parseInt(x.id, 10) === safeId);
   if (!f) {
-    toast('找不到对应的文件数据', 'error');
+    toast('异常：找不到对应的文件数据', 'error');
     return;
   }
   
   if (f.is_directory) {
-    // 文件夹下载
     state.currentParent = f.id;
     state.pathStack.push(f.name);
     if (typeof loadFiles === 'function') loadFiles();
   } else {
-  // 🌟 新增防线：判断是不是 Word/Excel 等浏览器无法直视的办公文档
-  const isOfficeDoc = f.name.toLowerCase().endsWith('.docx') || 
-                      f.name.toLowerCase().endsWith('.doc') || 
-                      f.name.toLowerCase().endsWith('.xlsx');
-
-  if (state.userPerms.has('file:read')) {
-    const viewer = document.getElementById('previewViewer');
-    const downloadBtn = document.getElementById('modalDownloadBtn');
     
-    document.getElementById('previewTitle').textContent = `在线文件预览：${f.name}`;
+    const n = (f.name || '').toLowerCase();
+    const m = (f.mime_type || '').toLowerCase();
     
-    // 🚀 分支 A：有下载权限（Admin 等）
-    if (state.userPerms.has('file:download')) {
-      // 如果是 Word 且有下载权，别让人看空白了，直接帮他触发物理下载！
-      if (isOfficeDoc) {
-        toast(` ${f.name} 是 Word 文档，已自动为您唤醒本地 Office 下载通道...`, 'success');
-        window.open(`/api/files/${safeId}/download`, '_blank');
-        return; // 拦截，不弹窗了
-      }
+    const isOfficeDoc = 
+      n.endsWith('.docx') || n.endsWith('.doc') || 
+      n.endsWith('.xlsx') || n.endsWith('.xls') ||
+      n === 'docx' || n === 'doc' || // 防止你测试时瞎敲的无后缀文件名
+      m.includes('word') || m.includes('officedocument') || 
+      m.includes('excel') || m.includes('spreadsheet');
 
-      toast(` ${f.name} 加载预览成功，已为您开通下载特权`, 'success');
-      if (downloadBtn) { downloadBtn.style.display = 'block'; downloadBtn.onclick = function() { window.open(`/api/files/${safeId}/download`, '_blank'); }; }
-      viewer.src = `/api/files/${safeId}/preview`;
-      openModal('previewModal');
-    } 
-    // 🚀 分支 B：只有只读权限（Guest 模式）
-    else {
-      // 如果是 Guest 碰到了 Word，无情拦截并警告
-      if (isOfficeDoc) {
-        toast(`抱歉，Word 文档无法在网页内直接安全阅览，且 Guest 账户禁止下载！`, 'error');
-        return; // 直接拦截，不弹空白窗
-      }
-
-      toast(`开启安全在线阅读通道（此模式禁止下载）...`, 'info');
-      if (downloadBtn) { downloadBtn.style.display = 'none'; downloadBtn.onclick = null; }
-      viewer.src = `/api/files/${safeId}/preview#toolbar=0&navpanes=0&scrollbar=1`;
+    if (state.userPerms.has('file:read')) {
+      const viewer = document.getElementById('previewViewer');
+      const downloadBtn = document.getElementById('modalDownloadBtn');
       
+      document.getElementById('previewTitle').textContent = `在线文件预览：${f.name}`;
+      viewer.src = "about:blank"; // 每次打开前，强行清空残留
+
+      // =========================================================================
+      // 情况一：如果是 Office 办公文档 (全流向内联提示，绝不给 iframe 真实地址！)
+      // =========================================================================
+      if (isOfficeDoc) {
+        if (state.userPerms.has('file:download')) {
+          toast(`📦 提示：Word 文档需下载阅读`, 'info');
+          if (downloadBtn) {
+            downloadBtn.style.display = 'block';
+            downloadBtn.onclick = function() { window.open(`/api/files/${safeId}/download`, '_blank'); };
+          }
+          viewer.src = `data:text/html;charset=utf-8,${encodeURIComponent(`
+            <div style="font-family:-apple-system,sans-serif; text-align:center; padding-top:120px; color:#ffffff; background:#1e2029; height:100vh; margin:0;">
+              <div style="font-size:64px; margin-bottom:20px;">📄</div>
+              <p style="font-size:18px; font-weight:600; margin-bottom:8px;">${f.name}</p>
+              <p style="color:#a0aec0; font-size:14px; margin-bottom:24px;">该文件为办公文档，局域网环境无法在网页内直接安全渲染。</p>
+              <p style="color:#6366f1; font-size:14px; font-weight:600;">您拥有系统下载权限，请点击右上方【⬇ 下载此文件】按钮保存至本地查阅。</p>
+            </div>
+          `)}`;
+        } else {
+          toast(`权限受限：Guest 账户禁止提取物理文档`, 'error');
+          if (downloadBtn) downloadBtn.style.display = 'none';
+          
+          state.selected.clear();
+          updateSelectionUI();
+          renderFiles();
+          closePanel(); 
+          
+          viewer.src = `data:text/html;charset=utf-8,${encodeURIComponent(`
+            <div style="font-family:-apple-system,sans-serif; text-align:center; padding-top:120px; color:#ff4d4f; background:#1e2029; height:100vh; margin:0;">
+              <div style="font-size:64px; margin-bottom:20px;">🔒</div>
+              <p style="font-size:18px; font-weight:600; margin-bottom:8px;">权限被拦截</p>
+              <p style="color:#a0aec0; font-size:14px;">根据 RBAC 安全策略，高级物理文档禁止向只读账户(Guest)外发或开放本地下载。</p>
+            </div>
+          `)}`;
+        }
+      } 
+      // =========================================================================
+      // 情况二：正常的 PDF / 图片 / TXT
+      // =========================================================================
+      else {
+        if (state.userPerms.has('file:download')) {
+          toast(` ${f.name} 加载预览成功，已开通下载特权`, 'success');
+          if (downloadBtn) {
+            downloadBtn.style.display = 'block';
+            downloadBtn.onclick = function() { window.open(`/api/files/${safeId}/download`, '_blank'); };
+          }
+          viewer.src = `/api/files/${safeId}/preview`;
+        } else {
+          toast(`开启安全在线阅读通道（禁止下载）...`, 'info');
+          if (downloadBtn) downloadBtn.style.display = 'none';
+          viewer.src = `/api/files/${safeId}/preview#toolbar=0&navpanes=0&scrollbar=1`;
+        }
+      }
+
       const modalBody = viewer.parentElement;
       if (modalBody) { modalBody.oncontextmenu = function() { return false; }; }
       openModal('previewModal');
+    } else {
+      toast('异常：您没有任何权限操作此文件', 'error');
     }
-  } else {
-    toast('您没有任何权限操作此文件', 'error');
   }
 }
-}
+
+
 // 辅助关闭函数
 function closePreviewModal() {
   document.getElementById('previewViewer').src = ""; // 清空，释放内存
@@ -1005,6 +1074,33 @@ function closePreviewModal() {
 // ══════════════════════════════════════════════
 //  Right Panel
 // ══════════════════════════════════════════════
+// function showPanel(id) {
+//   const f = state.files.find(x => x.id === id);
+//   if (!f) return;
+//   const panel = document.getElementById('rightPanel');
+//   panel.classList.remove('collapsed');
+
+//   const allFilePerms = ['file:read','file:write','file:update','file:delete','file:download'];
+//   const permTags = allFilePerms.map(p => {
+//     const have = state.userPerms.has(p);
+//     return `<span class="perm-tag ${have ? 'have' : 'deny'}">${have ? '✓' : '✗'} ${p}</span>`;
+//   }).join('');
+
+//   document.getElementById('panelBody').innerHTML = `
+//     <div class="detail-icon">${fileIcon(f)}</div>
+//     <div class="detail-name">${f.name}</div>
+//     <div class="detail-row"><span class="dk">类型</span><span class="dv">${f.is_directory ? '文件夹' : (f.mime_type || '未知')}</span></div>
+//     <div class="detail-row"><span class="dk">大小</span><span class="dv">${fmtSize(f.size)}</span></div>
+//     <div class="detail-row"><span class="dk">所有者</span><span class="dv">${f.owner}</span></div>
+//     <div class="detail-row"><span class="dk">创建时间</span><span class="dv">${f.created_at}</span></div>
+//     <div class="detail-row"><span class="dk">修改时间</span><span class="dv">${f.updated_at}</span></div>
+//     <div class="perm-list">
+//       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-family:'Space Mono',monospace;">我的权限</div>
+//       ${permTags}
+//     </div>
+//   `;
+// }
+
 function showPanel(id) {
   const f = state.files.find(x => x.id === id);
   if (!f) return;
@@ -1017,6 +1113,27 @@ function showPanel(id) {
     return `<span class="perm-tag ${have ? 'have' : 'deny'}">${have ? '✓' : '✗'} ${p}</span>`;
   }).join('');
 
+  // 判定右侧面板是否配渲染“下载按钮”
+  let downloadBtnHtml = '';
+  if (state.userPerms.has('file:download')) {
+    // 只有拥有 file:download 权限（Admin等）才渲染真正的下载按钮
+    downloadBtnHtml = `
+      <div style="margin-top: 16px;">
+        <button class="btn primary" style="width: 100%; justify-content: center; padding: 8px;" 
+                onclick="window.open('/api/files/${f.id}/download', '_blank')">
+          ⬇️ 下载此文件
+        </button>
+      </div>
+    `;
+  } else {
+    // Guest 账户进来，直接展示灰色禁用文字，彻底断绝念想
+    downloadBtnHtml = `
+      <div style="margin-top: 16px; text-align: center; background: rgba(240,62,62,0.05); border: 1px dashed var(--border); padding: 8px; border-radius: 6px;">
+        <span style="color: var(--muted); font-size: 12px; font-family: 'Space Mono', monospace;">🔒 只读安全模式 (禁下载)</span>
+      </div>
+    `;
+  }
+
   document.getElementById('panelBody').innerHTML = `
     <div class="detail-icon">${fileIcon(f)}</div>
     <div class="detail-name">${f.name}</div>
@@ -1025,6 +1142,9 @@ function showPanel(id) {
     <div class="detail-row"><span class="dk">所有者</span><span class="dv">${f.owner}</span></div>
     <div class="detail-row"><span class="dk">创建时间</span><span class="dv">${f.created_at}</span></div>
     <div class="detail-row"><span class="dk">修改时间</span><span class="dv">${f.updated_at}</span></div>
+    
+    ${downloadBtnHtml}
+
     <div class="perm-list">
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-family:'Space Mono',monospace;">我的权限</div>
       ${permTags}
@@ -1119,7 +1239,7 @@ function deleteSelected() {
 
   const ids = [...state.selected];
   
-  // 🌟 核心点：循环或者单个向后端发送标准的 DELETE 请求
+  // 循环或者单个向后端发送标准的 DELETE 请求
   // 这里我们采用 Promise.all 同时发送请求
   Promise.all(ids.map(id => 
     fetch(`/api/files/${id}`, { method: 'DELETE' }).then(res => res.json())
@@ -1222,7 +1342,7 @@ function loadAudit() {
 
 function exportAudit() {
   if (!state.userPerms.has('audit:export')) {
-    toast('❌ 无审计导出权限', 'error'); return;
+    toast('无审计导出权限', 'error'); return;
   }
   toast('⬇ 正在导出审计日志…', 'info');
 }
