@@ -559,7 +559,7 @@
       <div class="toolbar">
         <span style="font-size:13px;font-weight:600;">📋 审计日志</span>
         <div class="toolbar-sep"></div>
-        <button class="btn" onclick="exportAudit()">⬇ 导出 CSV</button>
+       <button class="btn" onclick="window.location.href='/api/admin/audit/export'">⬇ 导出 CSV</button>
         <select id="auditFilter" onchange="loadAudit()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:13px;cursor:pointer;">
           <option value="">全部操作</option>
           <option value="file:read">file:read</option>
@@ -1278,16 +1278,58 @@ function renameSelected() {
   openModal('renameModal');
 }
 
+// function doRename() {
+//   const name = document.getElementById('renameInput').value.trim();
+//   if (!name) { toast('名称不能为空', 'error'); return; }
+//   const f = state.files.find(x => x.id === renameTarget);
+//   if (f) f.name = name;
+//   state.filteredFiles = [...state.files];
+//   renderFiles();
+//   toast(`✏️ 已重命名为：${name}`, 'success');
+//   closeModal('renameModal');
+// }
 function doRename() {
   const name = document.getElementById('renameInput').value.trim();
   if (!name) { toast('名称不能为空', 'error'); return; }
-  const f = state.files.find(x => x.id === renameTarget);
-  if (f) f.name = name;
-  state.filteredFiles = [...state.files];
-  renderFiles();
-  toast(`✏️ 已重命名为：${name}`, 'success');
-  closeModal('renameModal');
+  
+  if (!renameTarget) { toast('异常：没有选中任何修改目标', 'error'); return; }
+
+  toast(' 正在同步更新至云服务器...', 'info');
+
+  // 向后端的 @files_bp.route("/<int:resource_id>", methods=["PUT"]) 发送标准的 JSON
+  fetch(`/api/files/${parseInt(renameTarget, 10)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name }) 
+  })
+  .then(res => res.json())
+  .then(res => {
+    if (res.code === 200) {
+      toast(`数据库与物理硬盘更名成功：${name}`, 'success');
+      closeModal('renameModal');
+      
+      // 核心安全操作：重新强行从后端拉取最干净的数据，刷新视图
+      return fetch('/api/files/').then(r => r.json());
+    } else {
+      toast(`重命名失败: ${res.error || '后端拒绝请求'}`, 'error');
+    }
+  })
+  .then(res => {
+    if (res) {
+      state.files = res.data;
+      state.filteredFiles = [...res.data];
+      state.selected.clear(); // 清空选择
+      updateSelectionUI();
+      renderFiles();
+      closePanel(); // 关闭右侧面板
+    }
+  })
+  .catch(err => {
+    console.error("前端网络请求失败:", err);
+    toast('无法连接到服务器修改接口', 'error');
+  });
 }
+
 
 function logout() {
   toast('👋 正在清理 Session 登出...', 'info');

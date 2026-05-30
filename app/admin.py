@@ -115,29 +115,41 @@ def get_audit_logs():
 @login_required
 @require_permission("audit:export")
 def export_audit_logs():
-    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(5000).all()
+    try:
+        logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(5000).all()
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID", "用户", "操作", "资源", "详情", "IP", "状态", "时间"])
-    for log in logs:
-        writer.writerow([
-            log.id,
-            log.user.username if log.user else "anonymous",
-            log.action,
-            log.resource.name if log.resource else "",
-            log.detail or "",
-            log.ip_address or "",
-            log.status,
-            log.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-        ])
+        output = io.BytesIO()
+        wrapper = io.TextIOWrapper(output, encoding='utf-8-sig', write_through=True)
+        writer = csv.writer(wrapper)
+        
+        # 写入表头
+        writer.writerow(["ID", "用户", "操作", "资源", "详情", "IP", "状态", "时间"])
+        
+        for log in logs:
+            writer.writerow([
+                log.id,
+                log.user.username if log.user else "anonymous",
+                log.action,
+                log.resource.name if log.resource else "",
+                log.detail or "",
+                log.ip_address or "",
+                log.status,
+                log.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            ])
 
-    write_audit_log(action="audit:export", detail="导出审计日志 CSV")
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment;filename=audit_logs.csv"},
-    )
+        # 写入完毕后，将指针移回字节流的最开始位置位置
+        output.seek(0)
+
+        write_audit_log(action="audit:export", detail="导出审计日志 CSV")
+        
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=audit_logs.csv"},
+        )
+    except Exception as e:
+        print(f" [导出CSV失败]: {str(e)}")
+        return f"服务器导出错误: {str(e)}", 500
 
 
 # ── 角色列表 ──────────────────────────────────

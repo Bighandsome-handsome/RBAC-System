@@ -96,7 +96,11 @@ main = Blueprint('main', __name__)
 @main.route("/")
 @main.route("/index")
 def index():
-    return render_template('base.html') # Let's render the base template now
+    if current_user.is_authenticated:
+        return redirect(url_for('main.dashboard'))
+    
+    return render_template('welcome.html')
+
 
 @main.route("/register", methods=['GET', 'POST'])
 def register():

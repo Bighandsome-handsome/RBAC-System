@@ -135,7 +135,26 @@ def upload_file():
 #     return send_from_directory(directory, real_filename, as_attachment=True)
 
 
-# ── 重命名/更新文件 ───────────────────────────
+# # ── 重命名/更新文件 ───────────────────────────
+# @files_bp.route("/<int:resource_id>", methods=["PUT"])
+# @login_required
+# @require_permission("file:update")
+# def update_file(resource_id):
+#     resource = Resource.query.get_or_404(resource_id)
+#     data = request.get_json() or {}
+
+#     old_name = resource.name
+#     if "name" in data:
+#         resource.name = data["name"]
+#     if "parent_id" in data:
+#         resource.parent_id = data["parent_id"]
+#     resource.updated_at = datetime.utcnow()
+
+#     db.session.commit()
+#     write_audit_log(action="file:update", resource_id=resource_id,
+#                     detail=f"重命名 {old_name} → {resource.name}")
+#     return jsonify({"code": 200, "data": resource.to_dict()})
+
 @files_bp.route("/<int:resource_id>", methods=["PUT"])
 @login_required
 @require_permission("file:update")
@@ -144,13 +163,37 @@ def update_file(resource_id):
     data = request.get_json() or {}
 
     old_name = resource.name
+    
     if "name" in data:
-        resource.name = data["name"]
+        new_name = data["name"].strip()
+        if new_name and new_name != old_name:
+            # 1. 只有非空且发生改变时才处理
+            # 拿到原文件的绝对物理路径
+            old_abs_path = os.path.abspath(resource.path)
+            
+            # 2. 计算新文件的绝对物理路径（基于当前的 UPLOAD_FOLDER 配置，或者是旧路径的同级目录）
+            upload_dir = get_upload_dir()
+            new_abs_path = os.path.abspath(os.path.join(upload_dir, new_name))
+            
+            # 3. 联动修改服务器硬盘上的真实物理文件名
+            if os.path.exists(old_abs_path):
+                try:
+                    os.rename(old_abs_path, new_abs_path)
+                    print(f"[硬盘同步成功]: 物理文件已更名 {old_abs_path} -> {new_abs_path}")
+                except Exception as e:
+                    print(f"[硬盘改名失败]: {str(e)}")
+                    return jsonify({"error": f"服务器文件更名失败: {str(e)}", "code": 500}), 500
+            
+            # 4. 同步将新名字和【绝对路径】写回数据库，死死焊死
+            resource.name = new_name
+            resource.path = new_abs_path
+
     if "parent_id" in data:
         resource.parent_id = data["parent_id"]
+        
     resource.updated_at = datetime.utcnow()
-
     db.session.commit()
+
     write_audit_log(action="file:update", resource_id=resource_id,
                     detail=f"重命名 {old_name} → {resource.name}")
     return jsonify({"code": 200, "data": resource.to_dict()})
