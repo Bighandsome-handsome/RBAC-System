@@ -1,117 +1,113 @@
-# Flask Auth & RBAC Project
+这是一份为您量身定制的 `README.md` 部署文档。它结合了您项目的实际结构（`app/`、蓝图、MySQL/SQLite 切换、测试套件等），可以直接复制到项目根目录下使用：
 
-A production-ready Flask application featuring user authentication, Role-Based Access Control (RBAC), and a complete admin dashboard.
+```markdown
+# 🛡️ 基于 Flask 的安全 RBAC 系统 (RBACSystem)
 
----
-
-## 🚀 Live Demo
-
-You can view the live, deployed application here:
-
-**[https://drun16.pythonanywhere.com/](https://drun16.pythonanywhere.com/)**
-
-
+本项目是一个基于 Flask 框架开发的、具备完善安全防护的**基于角色的访问控制 (RBAC) 系统**。系统实现了用户认证、多角色权限管理（Guest、Operator、Admin、Auditor）、文件安全操作管理以及全自动的安全审计日志留痕功能。
 
 ---
 
-## Description
+## 🚀 功能特性
 
-This project is a boilerplate Flask application that provides a solid foundation for building web applications that require user management. It includes user registration, login/logout, password hashing, and role management ('User' and 'Admin'). The admin dashboard, built with Flask-Admin, allows administrators to perform CRUD operations on users and roles.
-
----
-
-## Features
-
-* **User Authentication**: Secure user registration, login, and logout.
-* **Password Hashing**: Passwords are never stored in plaintext, using Bcrypt for strong hashing.
-* **Role-Based Access Control (RBAC)**: Two user roles (`User` and `Admin`) with protected routes.
-* **Admin Dashboard**: A full-featured admin panel (`/admin`) for managing users and roles.
-* **Database Migrations**: Uses Flask-Migrate to handle database schema changes.
-* **Automated Tests**: Includes a suite of tests written with `pytest`.
+- **精细化 RBAC 权限模型**：支持多对多关系（用户-角色-权限），实现动态鉴权。
+- **文件安全管理 API**：具备文件读取、上传、删除的权限隔离判定。
+- **全自动审计留痕**：任何越权行为（403 拒绝）和高危操作将自动记录至审计日志。
+- **自动化环境自愈**：系统启动时会自动检测并创建 MySQL 数据库及相关表结构。
+- **高覆盖率测试套件**：包含模型层单元测试与接口集成测试，确保核心逻辑零漏洞。
 
 ---
 
-## Technology Stack
+## 🛠️ 环境准备
 
-* **Backend**: Flask
-* **Database**: Flask-SQLAlchemy (defaults to SQLite, configurable for production)
-* **Authentication**: Flask-Login
-* **Admin Interface**: Flask-Admin
-* **Password Hashing**: Flask-Bcrypt
-* **Forms**: Flask-WTF
-* **Database Migrations**: Flask-Migrate
-* **Testing**: Pytest
+请确保您的开发环境已安装以下软件：
+- Python 3.11+
+- MySQL 8.0+ (可选，系统默认支持 SQLite 内存/本地模式)
+- Git
 
 ---
 
-## Deployment
+## 📦 部署步骤
 
-This application is deployed on **PythonAnywhere**. The production environment is configured to use a **MySQL** database and is served by a production-grade WSGI server.
-
----
-
-## Setup and Installation (Local)
-
-Follow these steps to get the application running on your local machine.
-
-### 1. Clone the Repository
+### 1. 克隆项目到本地
 ```bash
-git clone <your-repository-url>
-cd flask_rbac_project
+git clone <您的项目仓库地址>
+cd RBACSystem
+
 ```
 
-### 2. Create and Activate a Virtual Environment
+### 2. 创建并激活虚拟环境
+
+建议使用 `conda` 或 `venv` 管理依赖：
+
+**使用 conda (推荐):**
+
 ```bash
-# For macOS/Linux
-python3 -m venv venv
+conda create -n RBACSystem python=3.11
+conda activate RBACSystem
+
+```
+
+**使用 venv:**
+
+```bash
+python -m venv venv
+# Windows 激活:
+.\venv\Scripts\activate
+# Mac/Linux 激活:
 source venv/bin/activate
 
-# For Windows
-python -m venv venv
-.\venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+### 3. 安装项目依赖
+
 ```bash
 pip install -r requirements.txt
+
 ```
 
-### 4. Initialize the Database
-```bash
-# Initialize migration history
-flask db init
+### 4. 配置文件引导 (`config.py`)
 
-# Generate the initial migration
-flask db migrate -m "Initial migration"
+系统在 `config.py` 中管理配置。您可以根据实际需求切换数据库：
 
-# Apply the migration to the database
-flask db upgrade
-```
-
-### 5. Create Initial Roles and an Admin User
-Run the flask shell to set up the necessary user roles and create your first admin user.
-
-```bash
-flask shell
-```
-Inside the shell, run the appropriate Python commands to create `Role` and `User` objects.
+* **生产/开发环境 (MySQL)**：修改 `SQLALCHEMY_DATABASE_URI` 为您的实例地址。项目内置的 `create_database_if_not_exists` 函数会在启动时**自动创建**对应的库。
+* **测试环境 (SQLite)**：无需额外配置，运行测试时会自动启用隔离的内存数据库。
 
 ---
 
-## Running the Application
+## 🏃 启动与运行
 
-### Local Development
-To run the Flask development server on your machine:
+### 1. 初始化数据库与表结构
+
+在项目根目录下执行 Flask 迁移命令（或直接运行应用，系统会自动触发建表）：
+
+```bash
+flask db init
+flask db migrate -m "Initial migration"
+flask db upgrade
+
+```
+
+### 2. 启动本地开发服务器
+
 ```bash
 python run.py
+
 ```
-The application will be available at `http://127.0.0.1:5000`.
+
+启动成功后，可在浏览器中访问：`http://127.0.0.1:5000`
 
 ---
 
-## Running Tests
+## 🧪 自动化测试
 
-To run the automated tests, execute the following command from the root directory:
+项目配备了完善的单元测试与集成测试，覆盖了 RBAC 核心模型判定、未登录拦截、越权行为拦截以及审计日志闭环。
+
+运行所有测试用例：
+
 ```bash
-pytest
+pytest test_rbac.py -v
+
 ```
+
+> **注意**：测试脚本采用了 `session_transaction` 技术模拟登录态，并强制在 `sqlite:///:memory:` 内存数据库中运行，不会污染您的本地开发数据库。
+
