@@ -18,6 +18,7 @@ from flask import Blueprint, send_from_directory, jsonify, make_response
 from app.models import db, Resource, AuditLog
 from app.decorators import require_permission, write_audit_log
 
+
 files_bp = Blueprint("files", __name__, url_prefix="/api/files")
 
 ALLOWED_EXTENSIONS = {
@@ -333,7 +334,7 @@ def preview_file(resource_id):
             response.headers['Content-Disposition'] = f'inline; filename="{real_filename}"'
         elif real_filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
             response.headers['Content-Type'] = 'image/jpeg'
-        elif real_filename.lower().endswith('.txt'):
+        elif real_filename.lower().endswith(('.txt', '.md')):
             response.headers['Content-Type'] = 'text/plain; charset=utf-8'
             
         return response
@@ -343,28 +344,207 @@ def preview_file(resource_id):
 
 @files_bp.route("/<int:resource_id>/download", methods=["GET"])
 @login_required
-@require_permission("file:download") # 🌟 核心卡死：Guest 没有 download 权限，会在这里直接报 403 被拦截！
+# ❌ 注意：这里不要加 @require_permission 装饰器了！
 def download_file(resource_id):
     resource = Resource.query.get(resource_id)
-    
+
     if not resource:
-        print(f"\n 下载失败警报: 前端尝试下载 ID 为 {resource_id} 的文件，但数据库查无此人！")
-        all_ids = [r.id for r in Resource.query.all()]
-        print(f"💡 当前数据库 resource 表中真正存在的有效 ID 列表为: {all_ids}")
-        return jsonify({"error": f"数据库找不到该文件记录，无法下载", "code": 404}), 404
+        return jsonify({"error": "数据库找不到该文件记录", "code": 404}), 404
 
     if resource.is_directory:
         return jsonify({"error": "不能下载文件夹", "code": 400}), 400
 
+    # 🌟 核心修改：动态权限豁免逻辑
+    # 规则：如果是共享文件，直接放行；如果非共享，必须强制校验 file:download 权限
+    if not resource.is_shared and not current_user.has_permission("file:download"):
+        write_audit_log(
+            action="file:download", 
+            resource_id=resource_id,
+            status="denied", 
+            detail="权限不足：请求下载非共享资产"
+        )
+        return jsonify({"error": "权限不足：该文件不在共享区，需要下载权限", "code": 403}), 403
+
+    # 物理文件提取逻辑
     abs_path = os.path.abspath(resource.path)
     directory = os.path.dirname(abs_path)
     real_filename = os.path.basename(abs_path)
 
     if not os.path.exists(abs_path):
-        print(f" 下载失败：数据库有记录，但服务器磁盘找不到物理文件: {abs_path}")
         return jsonify({"error": "物理文件丢失", "code": 404}), 404
 
-    print(f"💾【开始下载】: 正在把文件【{real_filename}】作为附件推送到浏览器...")
+    # 记录成功下载日志
+    log_detail = f"下载了{'共享' if resource.is_shared else '私有'}文件 {real_filename}"
+    write_audit_log(action="file:download", resource_id=resource_id, detail=log_detail)
     
-    # as_attachment=True 会强制浏览器拉起系统的下载框，将其作为真实附件保存
     return send_from_directory(directory, real_filename, as_attachment=True)
+
+# ── 在线编辑：保存文件内容 ─────────────────────
+EDITABLE_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml"}
+
+@files_bp.route("/<int:resource_id>/content", methods=["PUT"])
+@login_required
+@require_permission("file:write")
+def save_file_content(resource_id):
+    """
+    在线编辑保存接口
+    PUT /api/files/<id>/content
+    Body: { "content": "文件新内容" }
+    需要 file:write 权限
+    """
+    resource = Resource.query.get(resource_id)
+    if not resource:
+        return jsonify({"error": "文件不存在", "code": 404}), 404
+    if resource.is_directory:
+        return jsonify({"error": "不能编辑文件夹", "code": 400}), 400
+
+    # 只允许编辑文本类文件
+    _, ext = os.path.splitext(resource.name.lower())
+    if ext not in EDITABLE_EXTENSIONS:
+        return jsonify({"error": f"不支持在线编辑 {ext} 类型文件", "code": 400}), 400
+
+    data = request.get_json()
+    if data is None or "content" not in data:
+        return jsonify({"error": "请求体缺少 content 字段", "code": 400}), 400
+
+    abs_path = os.path.abspath(resource.path)
+    if not os.path.exists(abs_path):
+        return jsonify({"error": "物理文件丢失", "code": 404}), 404
+
+    try:
+        with open(abs_path, "w", encoding="utf-8") as fobj:
+            fobj.write(data["content"])
+
+        resource.size = os.path.getsize(abs_path)
+        resource.updated_at = datetime.utcnow()
+        from app.models import db
+        db.session.commit()
+
+        write_audit_log(
+            action="file:write",
+            resource_id=resource_id,
+            detail=f"在线编辑保存 {resource.name}"
+        )
+        return jsonify({"code": 200, "message": "保存成功"})
+
+    except Exception as e:
+        return jsonify({"error": f"写入失败: {str(e)}", "code": 500}), 500
+
+@files_bp.route('/shared', methods=['GET'])
+@login_required
+def get_shared_files():
+    """
+    任何登录用户均可调用的共享主界面数据源网关。
+    层级化拉取处于共享态（is_shared=True）的资产拓扑树。
+    """
+    parent_id = request.args.get('parent_id', type=int)
+    
+    # 过滤出所有显式开启共享的资源
+    query = Resource.query.filter_by(is_shared=True)
+    
+    if parent_id:
+        # 如果传入了父节点，说明前端正在共享文件夹内部进行深度纵向钻取（Drill-down）
+        query = query.filter_by(parent_id=parent_id)
+    else:
+        query = query.filter_by(parent_id=None)
+        
+    resources = query.all()
+    
+    # 将模型数组序列化为标准 JSON 格式热推送给前端看板
+    return jsonify({
+        "code": 200,
+        "data": [r.to_dict() for r in resources]
+    })
+
+
+@files_bp.route('/<int:resource_id>/share', methods=['PUT'])
+@login_required
+@require_permission('file:update')  # 要求主体必须有文件更新特权
+def toggle_file_share(resource_id):
+    """
+    【辅助控制端点】：用于在主界面右键或菜单中，一键开启/关闭某个文件的共享状态
+    """
+    resource = Resource.query.get_or_404(resource_id)
+    data = request.get_json() or {}
+    
+    # 动态切换布尔值状态位
+    is_shared = bool(data.get('is_shared', True))
+    resource.is_shared = is_shared
+    db.session.commit()
+    
+    status_str = "发布共享" if is_shared else "取消共享"
+    write_audit_log(action="file:share", detail=f"对资产 [{resource.name}] 执行 {status_str}")
+    
+    return jsonify({
+        "code": 200,
+        "message": f"成功修改资产共享状态为: {is_shared}"
+    })
+
+# ── 共享区上传（所有登录用户均可） ────────────────────────────
+@files_bp.route('/shared/upload', methods=['POST'])
+@login_required
+@require_permission('file:read')   # 只要能登录就能上传到共享区（file:read 是最低权限）
+def shared_upload():
+    """
+    任何角色均可上传文件到共享区。
+    上传后自动设置 is_shared=True，无需额外操作。
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "未选择文件", "code": 400}), 400
+
+    f = request.files['file']
+    if f.filename == '':
+        return jsonify({"error": "文件名为空", "code": 400}), 400
+    if not allowed_file(f.filename):
+        return jsonify({"error": "不允许的文件类型", "code": 400}), 400
+
+    filename  = secure_filename(f.filename)
+    save_path = os.path.join(get_upload_dir(), filename)
+    f.save(save_path)
+
+    resource = Resource(
+        name         = filename,
+        path         = save_path,
+        size         = os.path.getsize(save_path),
+        mime_type    = f.content_type,
+        is_directory = False,
+        parent_id    = None,
+        owner_id     = current_user.id,
+        is_shared    = True,          # 共享区文件直接标记为 shared
+    )
+    db.session.add(resource)
+    db.session.commit()
+
+    write_audit_log(action="file:write", resource_id=resource.id,
+                    detail=f"上传到共享区: {filename}")
+    return jsonify({"code": 200, "data": resource.to_dict()})
+
+
+# ── 共享区文件修改（所有登录用户均可重命名） ──────────────────
+@files_bp.route('/<int:resource_id>/shared-update', methods=['PUT'])
+@login_required
+@require_permission('file:read')   # 共享区最低权限即可修改
+def shared_update_file(resource_id):
+    """
+    共享区专用修改接口：任何登录用户均可对共享文件进行重命名。
+    非共享文件不允许通过此接口修改（防止绕过权限）。
+    """
+    resource = Resource.query.get_or_404(resource_id)
+
+    # 安全检查：只能操作共享文件
+    if not resource.is_shared:
+        return jsonify({"error": "该文件不在共享区，无权修改", "code": 403}), 403
+
+    data = request.get_json() or {}
+    old_name = resource.name
+
+    if 'name' in data and data['name'].strip():
+        resource.name = data['name'].strip()
+
+    from datetime import datetime
+    resource.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    write_audit_log(action="file:update", resource_id=resource_id,
+                    detail=f"共享区重命名 {old_name} → {resource.name}")
+    return jsonify({"code": 200, "data": resource.to_dict()})

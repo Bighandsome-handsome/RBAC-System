@@ -87,7 +87,7 @@ from app.decorators import require_role
 # 浏览器每次请求时，Flask-Login 会自动拿 session 里的 user_id 通过这个函数查出用户完整对象
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 # Create a Blueprint

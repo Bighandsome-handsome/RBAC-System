@@ -101,6 +101,10 @@ def create_app(config_class=Config):
     db.init_app(app)
     migrate.init_app(app, db)
     bcrypt.init_app(app)
+    @login_manager.unauthorized_handler
+    def unauthorized():
+       return {"message": "Unauthorized"}, 401
+
     login_manager.init_app(app)
     
     # 导入并注册蓝图

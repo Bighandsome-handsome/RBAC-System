@@ -134,6 +134,8 @@ class Resource(db.Model):
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at   = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    is_shared = db.Column(db.Boolean, default=False, nullable=False)
+
     owner    = db.relationship("User",     backref="resources")
     children = db.relationship("Resource", backref=db.backref("parent", remote_side=[id]))
 

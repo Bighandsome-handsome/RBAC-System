@@ -1,20 +1,15 @@
-"""Add User and Role models
-
-Revision ID: 06cad9a2aa84
-Revises: 
-Create Date: 2025-09-14 21:59:10.435582
-
+﻿"""add is_shared to resources
+Revision ID: f526ae057299
+Revises: 06cad9a2aa84
+Create Date: 2026-06-04 17:55:46.047869
 """
 from alembic import op
 import sqlalchemy as sa
 
-
-# revision identifiers, used by Alembic.
-revision = '06cad9a2aa84'
-down_revision = None
+revision = 'f526ae057299'
+down_revision = '06cad9a2aa84'
 branch_labels = None
 depends_on = None
-
 
 def upgrade():
     with op.batch_alter_table('resources', schema=None) as batch_op:

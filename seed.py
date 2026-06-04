@@ -25,13 +25,12 @@ PERMISSIONS = [
 ROLE_PERMISSIONS = {
     "SuperAdmin": [p[0] for p in PERMISSIONS],
     "Admin": [
-        "file:read", "file:write", "file:update", "file:delete",
-        "file:download", "folder:create", "folder:delete",
+        "file:read", "file:write", "file:update",
+        "folder:create", "folder:delete",
         "user:view", "user:create", "user:edit", "audit:view",
     ],
     "Manager": [
-        "file:read", "file:write", "file:update", "file:download",
-        "folder:create", "user:view", "audit:view",
+        "file:read","user:view", "user:create", "user:edit", "audit:view",
     ],
     "Operator": [
         "file:read", "file:write", "file:download", "folder:create",

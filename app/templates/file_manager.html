@@ -6,6 +6,7 @@
   <title>FileVault — 安全文件管理系统</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     /* ── CSS 变量 ─────────────────────────────── */
     :root {
@@ -358,8 +359,15 @@
       border-radius: 12px;
       padding: 24px;
       width: 380px;
+      max-width: 95vw;
       transform: translateY(10px);
       transition: transform .2s;
+    }
+    /* 编辑器弹窗需要覆盖默认宽度 */
+    #editModal .modal {
+      width: 85%;
+      max-width: 1200px;
+      height: 85vh;
     }
     .modal-overlay.show .modal { transform: translateY(0); }
     .modal h3 { font-size: 15px; margin-bottom: 16px; }
@@ -497,12 +505,6 @@
     </div>
     <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
     <h3 id="previewTitle">在线文件预览</h3>
-    <div style="display: flex; align-items: center; gap: 12px;">
-      <button id="modalDownloadBtn" class="btn-primary" style="padding: 6px 12px; font-size: 13px; display: none;">
-        ⬇ 下载此文件
-      </button>
-      <button class="btn-icon" onclick="closePreviewModal()">✕</button>
-    </div>
   </div>
   </aside>
 
@@ -517,6 +519,8 @@
         <div class="toolbar-sep"></div>
         <button class="btn danger" onclick="deleteSelected()" id="btnDelete" disabled>🗑 删除</button>
         <button class="btn" onclick="renameSelected()" id="btnRename" disabled>✏️ 重命名</button>
+        <button class="btn" id="editFileBtn" onclick="openFileEditor()" 
+        style="display: none; background: var(--accent); border-color: var(--accent); color: white;">📝 在线编辑</button>
         <div class="toolbar-sep"></div>
         <div class="search-box">
           <span style="color:var(--muted);font-size:14px">🔍</span>
@@ -606,6 +610,49 @@
         </table>
       </div>
     </div>
+
+    <!-- Shared Files View -->
+    <div id="view-shared" class="view-section" style="display:none;flex-direction:column;height:100%;">
+      <div class="toolbar">
+        <button class="btn primary" onclick="showSharedUploadModal()" id="btnSharedUpload">⬆ 上传到共享区</button>
+        <div class="toolbar-sep"></div>
+        <button class="btn" onclick="renameSharedSelected()" id="btnSharedRename" disabled>✏️ 重命名</button>
+        <button class="btn" id="sharedDownloadBtn" onclick="downloadSharedSelected()" style="background: var(--surface2); color: var(--text);">
+    ⬇️ 下载文件
+  </button>
+        <div class="toolbar-sep"></div>
+        <div class="search-box">
+          <span style="color:var(--muted);font-size:14px">🔍</span>
+          <input type="text" placeholder="搜索共享文件…" oninput="filterSharedFiles(this.value)">
+        </div>
+        <div style="margin-left:auto;font-size:12px;color:var(--muted);padding:0 8px;">
+          🌐 共享区：所有角色均可上传、阅读和修改
+        </div>
+      </div>
+      <div style="position:relative;flex:1;overflow:hidden;display:flex;">
+        <div class="file-area" id="sharedFileArea">
+          <div class="file-grid" id="sharedFileContainer">
+            <div style="color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%;">
+              ⏳ 正在加载共享文件…
+            </div>
+          </div>
+        </div>
+        <!-- 共享区详情面板 -->
+        <div class="right-panel collapsed" id="sharedRightPanel">
+          <div class="panel-header">
+            <span>详情</span>
+            <span style="cursor:pointer;color:var(--muted)" onclick="closeSharedPanel()">✕</span>
+          </div>
+          <div class="panel-body" id="sharedPanelBody"></div>
+        </div>
+      </div>
+      <div class="statusbar">
+        <span>📁 <span id="sharedFileCount">0</span> 个共享项目</span>
+        <span>✅ <span id="sharedSelCount">0</span> 已选中</span>
+        <span style="color:var(--accent2);font-size:11px;">🌐 共享区 — 任何人可操作</span>
+      </div>
+    </div>
+
     <!-- 展示文件内容 -->
      <div id="previewModal" class="modal-overlay">
         <div class="modal-content" style="width: 85vw; height: 85vh; max-width: 1200px; display: flex; flex-direction: column;">
@@ -665,7 +712,71 @@
   </div>
 </div>
 
+<div id="editModal" class="modal-overlay">
+  <div class="modal" style="width: 85%; max-width: 1200px; height: 85vh; display: flex; flex-direction: column; padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h3 id="editModalTitle" style="color: var(--text);">📝 极客文档编辑器</h3>
+      <button onclick="closeModal('editModal')" style="background: none; border: none; color: var(--muted); cursor: pointer; font-size: 22px;">&times;</button>
+    </div>
+    
+    <div style="flex: 1; display: flex; gap: 20px; overflow: hidden; min-height: 0;">
+      <div style="flex: 1; display: flex; flex-direction: column;">
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; text-transform: uppercase;">源码编辑 (Source Code)</div>
+        <textarea id="fileEditorArea" oninput="handleEditorInput()" style="flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 16px; font-family: 'Space Mono', monospace; font-size: 14px; border-radius: 8px; resize: none; outline: none; line-height: 1.6;"></textarea>
+      </div>
+      <div id="mdPreviewContainer" style="flex: 1; display: flex; flex-direction: column;">
+        <div style="font-size: 11px; color: var(--accent2); margin-bottom: 4px; font-weight: 600; text-transform: uppercase;">✨ 实时预览 (Live Preview)</div>
+        <div id="filePreviewArea" class="markdown-preview" style="flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 16px; font-family: sans-serif; font-size: 14px; border-radius: 8px; overflow: auto;"></div>
+      </div>
+    </div>
+    
+    <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 15px;">
+      <button class="btn" onclick="closeModal('editModal')" style="background: var(--surface2); border-color: var(--border);">取消</button>
+      <button class="btn" onclick="doSaveFileContent()" style="background: var(--accent); border-color: var(--accent); color: white;">💾 保存修改</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .markdown-preview h1, .markdown-preview h2, .markdown-preview h3 { margin-bottom: 12px; margin-top: 8px; color: var(--accent2); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .markdown-preview p { line-height: 1.6; margin-bottom: 10px; opacity: 0.95; }
+  .markdown-preview code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-family: 'Space Mono', monospace; color: #ff7b72; font-size: 13px; }
+  .markdown-preview pre { background: var(--bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin-bottom: 12px; border: 1px solid var(--border); }
+  .markdown-preview pre code { background: none; padding: 0; color: var(--text); }
+  .markdown-preview ul, .markdown-preview ol { padding-left: 20px; margin-bottom: 10px; }
+</style>
+
 <!-- Toast Container -->
+
+<div class="modal-overlay" id="sharedUploadModal">
+  <div class="modal">
+    <h3>🌐 上传到共享区</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">所有登录用户均可访问共享区文件</p>
+    <div class="form-group">
+      <label>选择文件</label>
+      <input type="file" id="sharedUploadInput" multiple style="padding:6px;">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('sharedUploadModal')">取消</button>
+      <button class="btn primary" onclick="doSharedUpload()">上传</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="sharedRenameModal">
+  <div class="modal">
+    <h3>✏️ 重命名共享文件</h3>
+    <div class="form-group">
+      <label>新名称</label>
+      <input type="text" id="sharedRenameInput" placeholder="输入新名称">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('sharedRenameModal')">取消</button>
+      <button class="btn primary" onclick="doSharedRename()">确认</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
@@ -851,6 +962,33 @@ function renderFiles() {
   }
 }
 
+function handleEditorInput() {
+  const rawText = document.getElementById('fileEditorArea').value;
+  const previewArea = document.getElementById('filePreviewArea');
+
+  if (isMarkdownMode) {
+    if (typeof marked !== 'undefined') {
+      try {
+        // 用 DOMPurify 不可用时退而用 marked 自带的 sanitize 选项
+        const html = marked.parse(rawText, { mangle: false, headerIds: false });
+        previewArea.innerHTML = html;
+      } catch(e) {
+        // parse 出错时降级为纯文本展示，不关闭弹窗
+        previewArea.textContent = rawText;
+      }
+    } else {
+      previewArea.innerHTML = "<span style='color:var(--warn);'>⚠️ marked.js 未加载，请检查网络</span>";
+    }
+  } else {
+    // 纯文本：用 textContent 赋值再读出，避免 XSS
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'background:none;border:none;padding:0;color:var(--text);white-space:pre-wrap;word-break:break-all;';
+    pre.textContent = rawText;
+    previewArea.innerHTML = '';
+    previewArea.appendChild(pre);
+  }
+}
+
 function filterFiles(q) {
   q = q.toLowerCase().trim();
   state.filteredFiles = q
@@ -860,66 +998,73 @@ function filterFiles(q) {
   updateSelectionUI();
   renderFiles();
 }
-let clickTimer = null;
-
 // ══════════════════════════════════════════════
-//  Selection
+//  Selection  —  单击立即响应，双击用标志位隔离
 // ══════════════════════════════════════════════
-// function selectFile(id, e) {
-//   if (e && (e.ctrlKey || e.metaKey)) {
-//     state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
-//   } else {
-//     const wasOnly = state.selected.size === 1 && state.selected.has(id);
-//     state.selected.clear();
-//     if (!wasOnly) state.selected.add(id);
-//   }
-//   updateSelectionUI();
-//   renderFiles();
-//   // 右侧详情面板
-//   if (state.selected.size === 1) showPanel([...state.selected][0]);
-//   else closePanel();
-// }
+let _dblClickPending = false;
 
 function selectFile(id, e) {
-  if (e) e.stopPropagation(); // 阻止事件冒泡，防止触发背景的取消选中行为
+  if (e) e.stopPropagation();
+  if (_dblClickPending) return;   // 双击的第二次onclick，忽略
 
-  // 如果 300 毫秒内又点了一下，说明这是个“双击”动作！
-  if (clickTimer) {
-    clearTimeout(clickTimer); // 强行杀死刚刚建立的单击定时任务
-    clickTimer = null;        // 清空标记
-    return;                   // 核心绝杀：直接退出！不让单击逻辑产生任何多余渲染
+  if (e && (e.ctrlKey || e.metaKey)) {
+    state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+  } else {
+    const wasOnly = state.selected.size === 1 && state.selected.has(id);
+    state.selected.clear();
+    if (!wasOnly) state.selected.add(id);
   }
 
-  // 如果在 250~300 毫秒内没有第二下点击，说明用户确实只想“单击选中”，安全启动定时器
-  clickTimer = setTimeout(() => {
-    
-    // 完全保留单选/多选逻辑 
-    if (e && (e.ctrlKey || e.metaKey)) {
-      state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
-    } else {
-      const wasOnly = state.selected.size === 1 && state.selected.has(id);
-      state.selected.clear();
-      if (!wasOnly) state.selected.add(id);
-    }
-    
-    updateSelectionUI();
-    renderFiles();
-    
-    // 右侧详情面板
-    if (state.selected.size === 1) showPanel([...state.selected][0]);
-    else closePanel();
+  updateSelectionUI();   // 立即执行，编辑按钮立刻出现
+  renderFiles();
 
-    clickTimer = null; 
-  }, 250); 
+  if (state.selected.size === 1) showPanel([...state.selected][0]);
+  else closePanel();
 }
 
+
+// function updateSelectionUI() {
+//   const n = state.selected.size;
+//   document.getElementById('selCount').textContent = n;
+//   const hasDel = state.userPerms.has('file:delete');
+//   const hasRen = state.userPerms.has('file:update');
+//   document.getElementById('btnDelete').disabled = !n || !hasDel;
+//   document.getElementById('btnRename').disabled = n !== 1 || !hasRen;
+// }
 function updateSelectionUI() {
   const n = state.selected.size;
   document.getElementById('selCount').textContent = n;
+  
   const hasDel = state.userPerms.has('file:delete');
   const hasRen = state.userPerms.has('file:update');
+  const hasWrite = state.userPerms.has('file:write'); // 新增：是否有写入/编辑权限
+
   document.getElementById('btnDelete').disabled = !n || !hasDel;
   document.getElementById('btnRename').disabled = n !== 1 || !hasRen;
+
+  const editBtn = document.getElementById('editFileBtn'); 
+  
+  if (editBtn) {
+    if (n === 1) {
+      const selectedId = [...state.selected][0];
+      // parseInt 双保险：避免字符串 vs 数字严格相等失败
+      const f = state.files.find(x => parseInt(x.id,10) === parseInt(selectedId,10));
+      
+      if (f && !f.is_directory) {
+        const nameLower = f.name.toLowerCase();
+        // 只对 txt/md，且必须拥有 file:write 权限才显示编辑按钮
+        if ((nameLower.endsWith('.txt') || nameLower.endsWith('.md'))
+            && state.userPerms.has('file:write')) {
+          editBtn.style.display = 'inline-block';
+          editBtn.disabled = false;
+          return;
+        }
+      }
+    }
+    
+    // 如果选了多个文件、或者选的是文件夹、或者不是 txt/md，直接把编辑按钮隐藏掉
+    editBtn.style.display = 'none';
+  }
 }
 
 // function openFile(id) {
@@ -967,6 +1112,9 @@ function updateSelectionUI() {
 
 function openFile(id) {
   const safeId = parseInt(id, 10);
+  // 设置双击标志，让selectFile的onclick忽略本次
+  _dblClickPending = true;
+  setTimeout(() => { _dblClickPending = false; }, 300);
   if (isNaN(safeId)) {
     toast('异常：非法的文件 ID', 'error');
     return;
@@ -981,7 +1129,17 @@ function openFile(id) {
   if (f.is_directory) {
     state.currentParent = f.id;
     state.pathStack.push(f.name);
-    if (typeof loadFiles === 'function') loadFiles();
+    // 进入子目录：重新拉取该目录下的文件
+    fetch(`/api/files/?parent_id=${f.id}`)
+      .then(r => r.json())
+      .then(r => {
+        if (r.code === 200) {
+          state.files = r.data;
+          state.filteredFiles = [...r.data];
+          renderFiles();
+        }
+      })
+      .catch(() => toast('目录加载失败', 'error'));
   } else {
     
     const n = (f.name || '').toLowerCase();
@@ -1278,6 +1436,103 @@ function renameSelected() {
   openModal('renameModal');
 }
 
+let currentEditingFileId = null;
+let isMarkdownMode = false;
+
+// 1. 触发在线编辑（拉取数据）
+function openFileEditor() {
+  if (state.selected.size !== 1) return;
+  currentEditingFileId = parseInt([...state.selected][0], 10);
+  const f = state.files.find(x => parseInt(x.id, 10) === currentEditingFileId);
+  if (!f) { toast('找不到文件信息', 'error'); return; }
+
+  const nameLower = f.name.toLowerCase();
+  isMarkdownMode = nameLower.endsWith('.md');
+
+  const previewLabel = document.querySelector('#mdPreviewContainer > div:first-child');
+  if (previewLabel) {
+    previewLabel.textContent = isMarkdownMode ? '✨ 实时预览 (Live Preview)' : '📄 内容预览 (Plain Text)';
+  }
+
+  document.getElementById('editModalTitle').innerText = `📝 文本编辑器 — ${f.name}`;
+  // 显示加载状态，禁用保存按钮防止误操作
+  const textarea = document.getElementById('fileEditorArea');
+  const saveBtn  = document.querySelector('#editModal .btn[onclick="doSaveFileContent()"]');
+  textarea.value = '⏳ 正在从服务器加载文件内容...';
+  textarea.disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
+  document.getElementById('filePreviewArea').innerHTML = '';
+  openModal('editModal');
+
+  // AbortController：8秒超时，防止 fetch 永久挂起卡死页面
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), 8000);
+
+  fetch(`/api/files/${currentEditingFileId}/preview`, { signal: controller.signal })
+    .then(res => {
+      clearTimeout(timeoutId);
+      if (res.ok) return res.text();
+      // 非2xx：尝试解析JSON错误信息
+      return res.text().then(t => {
+        try { const j = JSON.parse(t); throw new Error(j.error || `HTTP ${res.status}`); }
+        catch(e) { if (e instanceof SyntaxError) throw new Error(`HTTP ${res.status}`); throw e; }
+      });
+    })
+    .then(rawText => {
+      textarea.value    = rawText;
+      textarea.disabled = false;
+      if (saveBtn) saveBtn.disabled = false;
+      textarea.focus();
+      handleEditorInput();
+    })
+    .catch(err => {
+      clearTimeout(timeoutId);
+      textarea.disabled = false;
+      if (saveBtn) saveBtn.disabled = false;
+      const msg = err.name === 'AbortError' ? '加载超时（8s），请检查后端是否正常运行' : `加载失败: ${err.message}`;
+      toast(msg, 'error');
+      closeModal('editModal');
+    });
+}
+
+// 2. 触发保存（推回数据）
+function doSaveFileContent() {
+  if (!currentEditingFileId) return;
+  const text = document.getElementById('fileEditorArea').value;
+  
+  toast('正在同步写入硬盘...', 'info');
+  
+  fetch(`/api/files/${currentEditingFileId}/content`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text })
+  })
+  .then(res => res.json())
+  .then(res => {
+    if (res.code === 200) {
+      toast('✅ 保存成功！', 'success');
+      closeModal('editModal');
+      // 重新从后端拉取最新文件列表刷新视图
+      fetch('/api/files/')
+        .then(r => r.json())
+        .then(r => {
+          if (r.code === 200) {
+            state.files = r.data;
+            state.filteredFiles = [...r.data];
+            renderFiles();
+          }
+        })
+        .catch(() => {}); // 刷新失败不影响保存结果提示
+    } else {
+      toast(`写入被拦截: ${res.error || '可能缺少 file:write 权限'}`, 'error');
+    }
+  })
+  .catch(err => {
+    toast('无法连接到服务器后端', 'error');
+  });
+}
+
+
 // function doRename() {
 //   const name = document.getElementById('renameInput').value.trim();
 //   if (!name) { toast('名称不能为空', 'error'); return; }
@@ -1348,9 +1603,10 @@ function switchView(view) {
   const target = document.getElementById(`view-${view}`);
   if (target) target.style.display = 'flex';
 
-  if (view === 'audit') loadAudit();
-  if (view === 'roles') loadRoles();
-  if (view === 'users') loadUsers();
+  if (view === 'audit')  loadAudit();
+  if (view === 'roles')  loadRoles();
+  if (view === 'users')  loadUsers();
+  if (view === 'shared') loadShared();
 }
 
 function setView(mode) {
@@ -1358,6 +1614,198 @@ function setView(mode) {
   document.getElementById('vbGrid').classList.toggle('active', mode === 'grid');
   document.getElementById('vbList').classList.toggle('active', mode === 'list');
   renderFiles();
+}
+
+
+// ══════════════════════════════════════════════
+//  共享文件区
+// ══════════════════════════════════════════════
+const sharedState = {
+  files:    [],
+  filtered: [],
+  selected: new Set(),
+};
+
+function loadShared() {
+  document.getElementById('sharedFileContainer').innerHTML =
+    '<div style="color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%;">⏳ 正在加载…</div>';
+
+  fetch('/api/files/shared')
+    .then(r => r.json())
+    .then(res => {
+      if (res.code === 200) {
+        sharedState.files    = res.data;
+        sharedState.filtered = [...res.data];
+        renderSharedFiles();
+      } else {
+        toast('共享区加载失败: ' + (res.error || ''), 'error');
+      }
+    })
+    .catch(() => toast('共享区加载失败，请检查网络', 'error'));
+}
+
+function renderSharedFiles() {
+  const container = document.getElementById('sharedFileContainer');
+  document.getElementById('sharedFileCount').textContent = sharedState.filtered.length;
+
+  if (!sharedState.filtered.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:60px;text-align:center;width:100%;">📭 共享区暂无文件<br><span style=\'font-size:11px;\'>点击"上传到共享区"添加第一个文件</span></div>';
+    return;
+  }
+
+  container.className = 'file-grid';
+  container.innerHTML = sharedState.filtered.map(f => `
+    <div class="file-card ${sharedState.selected.has(f.id) ? 'selected' : ''}"
+         onclick="selectSharedFile(${f.id}, event)">
+      <div class="check">✓</div>
+      <div class="file-icon">${fileIcon(f)}</div>
+      <div class="file-name">${f.name}</div>
+      <div class="file-meta">${fmtSize(f.size)}</div>
+      <div class="file-meta" style="font-size:9px;color:var(--muted);">by ${f.owner}</div>
+    </div>
+  `).join('');
+}
+
+function filterSharedFiles(q) {
+  q = q.toLowerCase().trim();
+  sharedState.filtered = q
+    ? sharedState.files.filter(f => f.name.toLowerCase().includes(q))
+    : [...sharedState.files];
+  sharedState.selected.clear();
+  updateSharedSelectionUI();
+  renderSharedFiles();
+}
+
+function selectSharedFile(id, e) {
+  if (e) e.stopPropagation();
+  if (sharedState.selected.has(id)) {
+    sharedState.selected.delete(id);
+  } else {
+    sharedState.selected.clear();
+    sharedState.selected.add(id);
+  }
+  updateSharedSelectionUI();
+  renderSharedFiles();
+  if (sharedState.selected.size === 1) showSharedPanel([...sharedState.selected][0]);
+  else closeSharedPanel();
+}
+
+function updateSharedSelectionUI() {
+  const n = sharedState.selected.size;
+  document.getElementById('sharedSelCount').textContent = n;
+  document.getElementById('btnSharedRename').disabled = (n !== 1);
+}
+
+function showSharedPanel(id) {
+  const f = sharedState.files.find(x => x.id === id);
+  if (!f) return;
+  const panel = document.getElementById('sharedRightPanel');
+  panel.classList.remove('collapsed');
+
+  document.getElementById('sharedPanelBody').innerHTML = `
+    <div class="detail-icon">${fileIcon(f)}</div>
+    <div class="detail-name">${f.name}</div>
+    <div class="detail-row"><span class="dk">大小</span><span class="dv">${fmtSize(f.size)}</span></div>
+    <div class="detail-row"><span class="dk">上传者</span><span class="dv">${f.owner}</span></div>
+    <div class="detail-row"><span class="dk">创建时间</span><span class="dv">${f.created_at}</span></div>
+    <div class="detail-row"><span class="dk">修改时间</span><span class="dv">${f.updated_at}</span></div>
+    <div style="margin-top:14px;padding:8px 10px;background:rgba(56,217,169,.08);border:1px solid rgba(56,217,169,.2);border-radius:7px;font-size:11px;color:var(--accent2);">
+      🌐 共享文件：所有用户可操作
+    </div>
+    ${state.userPerms.has('file:download') ? `
+    <div style="margin-top:10px;">
+      <button class="btn primary" style="width:100%;justify-content:center;" onclick="doDownloadById(${f.id})">
+        ⬇ 下载文件
+      </button>
+    </div>` : ''}
+  `;
+}
+
+function closeSharedPanel() {
+  document.getElementById('sharedRightPanel').classList.add('collapsed');
+}
+
+// 共享区上传
+function showSharedUploadModal() { openModal('sharedUploadModal'); }
+
+function doSharedUpload() {
+  const files = document.getElementById('sharedUploadInput').files;
+  if (!files.length) { toast('请选择文件', 'error'); return; }
+
+  const formData = new FormData();
+  for (const f of files) formData.append('file', f);
+
+  // 逐个上传（多文件循环）
+  const uploads = [...files].map(f => {
+    const fd = new FormData();
+    fd.append('file', f);
+    return fetch('/api/files/shared/upload', { method: 'POST', body: fd })
+      .then(r => r.json());
+  });
+
+  Promise.all(uploads)
+    .then(results => {
+      const ok = results.filter(r => r.code === 200).length;
+      toast(`✅ 成功上传 ${ok} 个文件到共享区`, 'success');
+      closeModal('sharedUploadModal');
+      loadShared();   // 刷新共享区列表
+    })
+    .catch(() => toast('上传失败', 'error'));
+}
+
+// 共享区重命名
+let sharedRenameTarget = null;
+
+function renameSharedSelected() {
+  if (sharedState.selected.size !== 1) return;
+  sharedRenameTarget = [...sharedState.selected][0];
+  const f = sharedState.files.find(x => x.id === sharedRenameTarget);
+  document.getElementById('sharedRenameInput').value = f ? f.name : '';
+  openModal('sharedRenameModal');
+}
+
+function doSharedRename() {
+  const name = document.getElementById('sharedRenameInput').value.trim();
+  if (!name) { toast('名称不能为空', 'error'); return; }
+
+  fetch(`/api/files/${sharedRenameTarget}/shared-update`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.code === 200) {
+        toast(`✏️ 已重命名为：${name}`, 'success');
+        closeModal('sharedRenameModal');
+        loadShared();
+      } else {
+        toast('重命名失败: ' + (res.error || ''), 'error');
+      }
+    })
+    .catch(() => toast('请求失败', 'error'));
+}
+
+function downloadSharedSelected() {
+  // 1. 判断是否选择了一个资源
+  if (sharedState.selected.size !== 1) {
+    toast('请选择单个文件进行下载', 'info');
+    return;
+  }
+  
+  // 2. 获取当前选中的文件 ID
+  const targetId = [...sharedState.selected][0];
+  const f = sharedState.files.find(x => x.id === targetId);
+  
+  // 3. 文件夹无法下载
+  if (f && f.is_directory) {
+    toast('不能直接下载文件夹', 'error');
+    return;
+  }
+  
+  // 4. 直接无条件弹出下载，直接命中你改好的后端 download 接口
+  window.open(`/api/files/${targetId}/download`, '_blank');
+  toast('💾 开始下载共享文件...', 'success');
 }
 
 // ══════════════════════════════════════════════
